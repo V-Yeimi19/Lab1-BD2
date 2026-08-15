@@ -1,0 +1,99 @@
+import config
+
+q21_orig = """
+EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
+SELECT
+    d.dept_name,
+    AVG(s.amount) AS salario_promedio,
+    COUNT(DISTINCT e.id) AS total_empleados
+FROM employees.employee e,
+     employees.department_employee de,
+     employees.salary s,
+     employees.department d
+WHERE e.id = de.employee_id
+  AND e.id = s.employee_id
+  AND de.department_id = d.id
+  AND de.to_date > CURRENT_DATE
+  AND s.to_date > CURRENT_DATE
+GROUP BY d.dept_name
+ORDER BY salario_promedio DESC;
+"""
+res_21_orig = config.run_query(q21_orig)
+print("\n".join(res_21_orig['QUERY PLAN']))
+
+# Creamos índices compuestos optimizados
+config.run_query("CREATE INDEX IF NOT EXISTS idx_salary_emp_curr ON employees.salary (employee_id, to_date) INCLUDE (amount);")
+config.run_query("CREATE INDEX IF NOT EXISTS idx_dept_emp_curr ON employees.department_employee (department_id, employee_id, to_date);")
+
+q21_opt = """
+EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
+SELECT
+    d.dept_name,
+    AVG(s.amount) AS salario_promedio,
+    COUNT(DISTINCT de.employee_id) AS total_empleados
+FROM employees.department d
+JOIN employees.department_employee de ON d.id = de.department_id
+JOIN employees.salary s ON de.employee_id = s.employee_id
+WHERE de.to_date > CURRENT_DATE
+  AND s.to_date > CURRENT_DATE
+GROUP BY d.dept_name
+ORDER BY salario_promedio DESC;
+"""
+res_21_opt = config.run_query(q21_opt)
+print("\n".join(res_21_opt['QUERY PLAN']))
+
+q22_orig = """
+EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
+SELECT
+    d.dept_name,
+    (SELECT AVG(s.amount)
+     FROM employees.salary s
+     JOIN employees.department_employee de ON de.employee_id = s.employee_id
+     WHERE de.department_id = d.id
+       AND s.to_date > CURRENT_DATE
+       AND de.to_date > CURRENT_DATE) AS promedio_depto
+FROM employees.department d
+WHERE
+    (SELECT AVG(s.amount)
+     FROM employees.salary s
+     JOIN employees.department_employee de ON de.employee_id = s.employee_id
+     WHERE de.department_id = d.id
+       AND s.to_date > CURRENT_DATE
+       AND de.to_date > CURRENT_DATE)
+    >
+    (SELECT AVG(s2.amount)
+     FROM employees.salary s2
+     WHERE s2.to_date > CURRENT_DATE)
+ORDER BY promedio_depto DESC;
+"""
+res_22_orig = config.run_query(q22_orig)
+print("\n".join(res_22_orig['QUERY PLAN']))
+
+q22_opt = """
+EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
+WITH global_avg AS (
+    SELECT AVG(amount) AS avg_global
+    FROM employees.salary
+    WHERE to_date > CURRENT_DATE
+),
+dept_avg AS (
+    SELECT 
+        de.department_id,
+        AVG(s.amount) AS avg_depto
+    FROM employees.salary s
+    JOIN employees.department_employee de ON de.employee_id = s.employee_id
+    WHERE s.to_date > CURRENT_DATE 
+      AND de.to_date > CURRENT_DATE
+    GROUP BY de.department_id
+)
+SELECT 
+    d.dept_name,
+    da.avg_depto AS promedio_depto
+FROM dept_avg da
+JOIN employees.department d ON d.id = da.department_id
+CROSS JOIN global_avg ga
+WHERE da.avg_depto > ga.avg_global
+ORDER BY promedio_depto DESC;
+"""
+res_22_opt = config.run_query(q22_opt)
+print("\n".join(res_22_opt['QUERY PLAN']))
